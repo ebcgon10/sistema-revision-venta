@@ -14,13 +14,24 @@ st.set_page_config(
 )
 
 # ------------------------------------------------------------------
-# ESTILOS (tema oscuro, acento rojo, igual línea que Reabasto de Cajas)
+# PALETA DE COLORES CCU (Manual de Identidad de Marca CCU, pág. 57)
+# ------------------------------------------------------------------
+COLOR_369C = "#64A70B"   # Verde - Primario - "Sin Faltante"
+COLOR_554C = "#205C40"   # Verde oscuro - Primario - "Total Venta"
+COLOR_1235C = "#FFB81C"  # Ámbar - Secundario - "Con Faltante"
+COLOR_7461C = "#007DBA"  # Azul - Secundario - Texto tabla
+COLOR_1945C = "#A6093D"  # Vino - Secundario - "En Quiebre"
+COLOR_BLANCO = "#FFFFFF"
+COLOR_NEGRO = "#000000"
+
+# ------------------------------------------------------------------
+# ESTILOS (tema oscuro de la app, acento rojo, tarjetas y tabla en blanco/marca CCU)
 # ------------------------------------------------------------------
 st.markdown(
-    """
+    f"""
     <style>
-    .stApp { background-color: #0e1117; }
-    div.stButton > button {
+    .stApp {{ background-color: #0e1117; }}
+    div.stButton > button {{
         background-color: #ff4b4b;
         color: white;
         font-weight: 700;
@@ -29,8 +40,28 @@ st.markdown(
         border: none;
         border-radius: 8px;
         width: 100%;
-    }
-    div.stButton > button:hover { background-color: #ff6b6b; color: white; }
+    }}
+    div.stButton > button:hover {{ background-color: #ff6b6b; color: white; }}
+
+    .ccu-metric-card {{
+        background-color: {COLOR_BLANCO};
+        border-radius: 10px;
+        padding: 1rem 1rem 0.8rem 1rem;
+        text-align: left;
+        height: 100%;
+    }}
+    .ccu-metric-label {{
+        font-size: 0.85rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.02em;
+        margin-bottom: 0.3rem;
+    }}
+    .ccu-metric-value {{
+        font-size: 2.1rem;
+        font-weight: 800;
+        line-height: 1.1;
+    }}
     </style>
     """,
     unsafe_allow_html=True,
@@ -67,7 +98,6 @@ def cargar_bbdd_codigos():
 def procesar_preventa(df_preventa):
     """Agrupa la preventa (SKU truck) sumando Cantidad (en cajas)."""
     df = df_preventa.copy()
-    # normalizar nombres de columnas esperadas
     df.columns = [c.strip() for c in df.columns]
     col_sku = "SKU"
     col_desc = "Descripcion" if "Descripcion" in df.columns else "Descripción"
@@ -101,8 +131,6 @@ def procesar_stock(df_stock, centros_validos, nombre_stock):
     centros_encontrados = set(df[col_centro].unique())
     centros_invalidos = centros_encontrados - centros_validos
     if centros_invalidos and not centros_encontrados.issubset(centros_validos):
-        # Si el archivo trae centros que no corresponden al tipo esperado, avisamos
-        # pero igual filtramos y seguimos con los válidos.
         df = df[df[col_centro].isin(centros_validos)]
 
     agrupado = (
@@ -119,30 +147,23 @@ def calcular_faltante(row):
     if abastecimiento >= 0:
         return "No"
     else:
-        if stock_cl > 0:
-            return "Sí"
-        else:
-            return "Quiebre"
+        return "Sí" if stock_cl > 0 else "Quiebre"
 
 
 def construir_tabla(df_venta, df_stock_cd, df_stock_cl, bbdd):
-    # 1. Cruzar venta (truck) con BBDD para obtener SKU SAP
     tabla = df_venta.merge(bbdd, left_on="SKU_TRUCK", right_on="CODIGO_TRK", how="left")
     tabla["SKU_SAP"] = tabla["CODIGO_SAP"]
     tabla.loc[tabla["SKU_SAP"].isna(), "SKU_SAP"] = "SIN MAPEO"
     tabla = tabla.drop(columns=["CODIGO_TRK", "CODIGO_SAP"])
 
-    # 2. Cruzar con Stock CD y Stock CL por SKU SAP
     tabla = tabla.merge(df_stock_cd, on="SKU_SAP", how="left")
     tabla = tabla.merge(df_stock_cl, on="SKU_SAP", how="left")
     tabla["STOCK_CD"] = tabla["STOCK_CD"].fillna(0)
     tabla["STOCK_CL"] = tabla["STOCK_CL"].fillna(0)
 
-    # 3. Calcular abastecimiento y faltante
     tabla["ABASTECIMIENTO"] = tabla["STOCK_CD"] - tabla["VENTA"]
     tabla["FALTANTE_STOCK"] = tabla.apply(calcular_faltante, axis=1)
 
-    # 4. Orden final de columnas
     tabla = tabla[
         [
             "SKU_TRUCK",
@@ -159,50 +180,51 @@ def construir_tabla(df_venta, df_stock_cd, df_stock_cl, bbdd):
     return tabla
 
 
-def to_excel_bytes(df):
+def to_excel_bytes(df, nombre_hoja="Revision Venta"):
     output = BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        df.to_excel(writer, index=False, sheet_name="Revision Venta")
+        df.to_excel(writer, index=False, sheet_name=nombre_hoja)
         workbook = writer.book
-        worksheet = writer.sheets["Revision Venta"]
+        worksheet = writer.sheets[nombre_hoja]
 
         header_fmt = workbook.add_format(
-            {"bold": True, "bg_color": "#1f2630", "font_color": "white", "border": 1}
+            {"bold": True, "bg_color": COLOR_7461C, "font_color": "white", "border": 1}
         )
         for col_num, value in enumerate(df.columns.values):
             worksheet.write(0, col_num, value, header_fmt)
             worksheet.set_column(col_num, col_num, 18)
 
-        fmt_si = workbook.add_format({"bg_color": "#fff3b0", "font_color": "#7a5c00"})
-        fmt_no = workbook.add_format({"bg_color": "#c6efce", "font_color": "#006100"})
-        fmt_quiebre = workbook.add_format({"bg_color": "#ffc7ce", "font_color": "#9c0006"})
+        if "FALTANTE_STOCK" in df.columns:
+            fmt_si = workbook.add_format({"bg_color": COLOR_1235C, "font_color": "#3a2a00"})
+            fmt_no = workbook.add_format({"bg_color": COLOR_369C, "font_color": "white"})
+            fmt_quiebre = workbook.add_format({"bg_color": COLOR_1945C, "font_color": "white"})
 
-        n_rows = len(df)
-        col_idx = df.columns.get_loc("FALTANTE_STOCK")
-        worksheet.conditional_format(
-            1, col_idx, n_rows, col_idx,
-            {"type": "text", "criteria": "containing", "value": "Sí", "format": fmt_si},
-        )
-        worksheet.conditional_format(
-            1, col_idx, n_rows, col_idx,
-            {"type": "text", "criteria": "containing", "value": "No", "format": fmt_no},
-        )
-        worksheet.conditional_format(
-            1, col_idx, n_rows, col_idx,
-            {"type": "text", "criteria": "containing", "value": "Quiebre", "format": fmt_quiebre},
-        )
+            n_rows = len(df)
+            col_idx = df.columns.get_loc("FALTANTE_STOCK")
+            worksheet.conditional_format(
+                1, col_idx, n_rows, col_idx,
+                {"type": "text", "criteria": "containing", "value": "Sí", "format": fmt_si},
+            )
+            worksheet.conditional_format(
+                1, col_idx, n_rows, col_idx,
+                {"type": "text", "criteria": "containing", "value": "No", "format": fmt_no},
+            )
+            worksheet.conditional_format(
+                1, col_idx, n_rows, col_idx,
+                {"type": "text", "criteria": "containing", "value": "Quiebre", "format": fmt_quiebre},
+            )
     return output.getvalue()
 
 
 def estilo_filas(row):
-    color = ""
+    """Fondo por estado (paleta CCU) + texto legible según el color de fondo."""
     if row["FALTANTE_STOCK"] == "Quiebre":
-        color = "background-color: #4d1a1a"
+        return [f"background-color: {COLOR_1945C}; color: white"] * len(row)
     elif row["FALTANTE_STOCK"] == "Sí":
-        color = "background-color: #4d4419"
+        return [f"background-color: {COLOR_1235C}; color: #3a2a00"] * len(row)
     elif row["FALTANTE_STOCK"] == "No":
-        color = "background-color: #1a4d20"
-    return [color] * len(row)
+        return [f"background-color: {COLOR_369C}; color: white"] * len(row)
+    return [f"background-color: white; color: {COLOR_7461C}"] * len(row)
 
 
 # ------------------------------------------------------------------
@@ -210,9 +232,12 @@ def estilo_filas(row):
 # ------------------------------------------------------------------
 st.markdown("## 📊 Sistema de Revisión Venta")
 st.markdown(
-    "Cruza **Preventa (SKU Truck)**, **Stock CD** y **Stock CL** contra la base de "
-    "códigos Truck ↔ SAP, y genera la tabla de **abastecimiento y faltante de stock** "
-    "lista para revisar."
+    "**Cruce y Análisis de Abastecimiento (Preventa vs. Inventario CD-CL):** "
+    "Conciliación sistemática entre la demanda proyectada por preventa y las "
+    "existencias físicas e intangibles registradas en los Centros de Distribución "
+    "(CD) y Logísticos (CL), con el propósito de optimizar el plan de abastecimiento, "
+    "identificar brechas de inventario y mitigar de forma proactiva el riesgo de "
+    "faltantes y quiebres de stock."
 )
 
 st.markdown("---")
@@ -220,29 +245,40 @@ st.markdown("---")
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    st.markdown("### 1. Preventa")
-    st.caption("Archivo con SKU **Truck** (CSV o Excel exportado del sistema de pedidos)")
+    st.markdown("### 1. Módulo de Preventa")
+    st.caption(
+        "Carga de Datos de Demanda: importación del reporte consolidado de "
+        "preventa, exportado directamente desde el sistema operacional Truck."
+    )
     file_preventa = st.file_uploader(
         "Sube Preventa:", type=["csv", "xlsx", "xls"], key="preventa"
     )
 
 with col2:
-    st.markdown("### 2. Stock CD")
-    st.caption("Centros terminación **06** (2306, 5006, 7106, 8006, 9006)")
+    st.markdown("### 2. Módulo de Inventario CD")
+    st.caption(
+        "Carga de Stock Centros Coquimbo: importación del informe de existencias "
+        "extraído mediante la transacción MB52 en SAP, correspondiente a los "
+        "Centros Operativos de Coquimbo (terminación 06)."
+    )
     file_stock_cd = st.file_uploader(
         "Sube Stock CD:", type=["csv", "xlsx", "xls"], key="stock_cd"
     )
 
 with col3:
-    st.markdown("### 3. Stock CL")
-    st.caption("Centros terminación **07** (2307, 5007, 7107, 8007, 9007)")
+    st.markdown("### 3. Módulo de Inventario CL")
+    st.caption(
+        "Carga de Stock Centros Coquimext: importación del informe de existencias "
+        "extraído mediante la transacción MB52 en SAP, correspondiente a los "
+        "Centros Operativos de Coquimext (terminación 07)."
+    )
     file_stock_cl = st.file_uploader(
         "Sube Stock CL:", type=["csv", "xlsx", "xls"], key="stock_cl"
     )
 
 st.markdown("---")
 
-procesar = st.button("🚀 Procesar Revisión de Venta")
+procesar = st.button("🚀 Procesar Revisión de Venta", use_container_width=True)
 
 if procesar:
     if not (file_preventa and file_stock_cd and file_stock_cl):
@@ -306,10 +342,60 @@ if "tabla_resultado" in st.session_state:
     total_no = int((tabla["FALTANTE_STOCK"] == "No").sum())
 
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Total Venta (cajas)", f"{total_venta:,}".replace(",", "."))
-    m2.metric("SKU sin faltante", total_no)
-    m3.metric("SKU con faltante (hay CL)", total_si)
-    m4.metric("SKU en quiebre", total_quiebre)
+    tarjetas = [
+        (m1, "Total Venta (cajas)", f"{total_venta:,}".replace(",", "."), COLOR_554C),
+        (m2, "SKU sin faltante", str(total_no), COLOR_369C),
+        (m3, "SKU con faltante (hay CL)", str(total_si), COLOR_1235C),
+        (m4, "SKU en quiebre", str(total_quiebre), COLOR_1945C),
+    ]
+    for col, label, valor, color in tarjetas:
+        with col:
+            st.markdown(
+                f"""
+                <div class="ccu-metric-card">
+                    <div class="ccu-metric-label" style="color:{color};">{label}</div>
+                    <div class="ccu-metric-value" style="color:{color};">{valor}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+    st.markdown("")
+
+    # --------------------------------------------------------------
+    # Tabla rápida: productos a traer desde CL + sin mapeo
+    # --------------------------------------------------------------
+    a_traer = tabla[tabla["FALTANTE_STOCK"] == "Sí"].copy()
+    a_traer["MOTIVO"] = "Con faltante — traer desde CL"
+    sin_mapeo_tabla = tabla[tabla["SKU_SAP"] == "SIN MAPEO"].copy()
+    sin_mapeo_tabla["MOTIVO"] = "Sin mapeo — revisar código"
+    tabla_rapida = pd.concat([a_traer, sin_mapeo_tabla], ignore_index=True)
+
+    st.markdown("### 🔎 Productos a traer y sin mapeo")
+    st.caption(
+        "Vista rápida solo con los SKU que requieren traslado desde CL y los que "
+        "no se pudieron mapear — para agilizar la búsqueda antes de revisar la tabla completa."
+    )
+    if len(tabla_rapida) > 0:
+        st.dataframe(
+            tabla_rapida.style.apply(estilo_filas, axis=1).format(
+                {"VENTA": "{:.0f}", "STOCK_CD": "{:.0f}", "STOCK_CL": "{:.0f}", "ABASTECIMIENTO": "{:.0f}"}
+            ),
+            use_container_width=True,
+            height=300,
+        )
+        excel_rapida = to_excel_bytes(tabla_rapida, nombre_hoja="A Traer y Sin Mapeo")
+        st.download_button(
+            label="⬇️ Descargar Excel (a traer / sin mapeo)",
+            data=excel_rapida,
+            file_name="Productos_A_Traer_Sin_Mapeo.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="descarga_rapida",
+        )
+    else:
+        st.success("No hay productos con faltante ni sin mapeo. 🎉")
+
+    st.markdown("---")
 
     st.markdown("### Resultado — Revisión de Venta")
     st.dataframe(
@@ -326,4 +412,5 @@ if "tabla_resultado" in st.session_state:
         data=excel_bytes,
         file_name="Revision_Venta.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="descarga_completa",
     )
