@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from io import BytesIO, StringIO
+from io import BytesIO
 import os
  
 # ------------------------------------------------------------------
@@ -73,43 +73,22 @@ BBDD_PATH = os.path.join(BASE_DIR, "bbdd_codigos.csv")
 CENTROS_CD = {"2306", "5006", "7106", "8006", "9006"}  # terminación 06
 CENTROS_CL = {"2307", "5007", "7107", "8007", "9007"}  # terminación 07
  
-# Codificaciones a probar, en orden. latin-1 nunca falla (mapea los 256 bytes),
-# por lo que actúa como último recurso.
-CODIFICACIONES = ("utf-8-sig", "cp1252", "latin-1")
- 
  
 # ------------------------------------------------------------------
 # FUNCIONES DE CARGA
 # ------------------------------------------------------------------
-def decodificar_bytes(raw: bytes) -> str:
-    """Decodifica bytes probando varias codificaciones (Truck/Windows suele
-    exportar en cp1252/latin-1 en vez de UTF-8)."""
-    for enc in CODIFICACIONES:
-        try:
-            return raw.decode(enc)
-        except UnicodeDecodeError:
-            continue
-    # No debería llegar aquí, pero por seguridad:
-    return raw.decode("latin-1", errors="replace")
- 
- 
 def leer_archivo(uploaded_file):
     """Lee CSV o Excel (cualquiera de las dos extensiones) y devuelve un DataFrame."""
     nombre = uploaded_file.name.lower()
     if nombre.endswith(".csv"):
-        raw = uploaded_file.getvalue()  # bytes completos, sin problemas de puntero
-        texto = decodificar_bytes(raw)
-        return pd.read_csv(StringIO(texto), sep=None, engine="python", dtype=str)
+        return pd.read_csv(uploaded_file, sep=None, engine="python", dtype=str)
     else:
         return pd.read_excel(uploaded_file, sheet_name=0, dtype=str)
  
  
 @st.cache_data
 def cargar_bbdd_codigos():
-    with open(BBDD_PATH, "rb") as f:
-        texto = decodificar_bytes(f.read())
-    bbdd = pd.read_csv(StringIO(texto), dtype=str, sep=None, engine="python")
-    bbdd.columns = [c.strip() for c in bbdd.columns]
+    bbdd = pd.read_csv(BBDD_PATH, dtype=str)
     bbdd["CODIGO_TRK"] = bbdd["CODIGO_TRK"].astype(str).str.strip()
     bbdd["CODIGO_SAP"] = bbdd["CODIGO_SAP"].astype(str).str.strip()
     bbdd = bbdd.drop_duplicates(subset=["CODIGO_TRK"])
@@ -136,8 +115,10 @@ def procesar_preventa(df_preventa):
  
  
 def procesar_stock(df_stock, centros_validos, nombre_stock):
-    """Suma 'Libre utilización' agrupado por Material, validando que el centro
-    corresponda al tipo de stock (CD termina en 06, CL termina en 07)."""
+    """Suma 'Libre utilización' agrupado por Material, quedándose solo con las
+    filas cuyo Centro corresponda al tipo de stock pedido (CD termina en 06,
+    CL termina en 07). Sirve tanto si el archivo trae solo un tipo de centro
+    como si trae ambos mezclados (se filtra el que no corresponde)."""
     df = df_stock.copy()
     df.columns = [c.strip() for c in df.columns]
  
@@ -149,17 +130,22 @@ def procesar_stock(df_stock, centros_validos, nombre_stock):
     df[col_centro] = df[col_centro].astype(str).str.strip()
     df[col_libre] = pd.to_numeric(df[col_libre], errors="coerce").fillna(0)
  
-    centros_encontrados = set(df[col_centro].unique())
-    centros_invalidos = centros_encontrados - centros_validos
-    if centros_invalidos and not centros_encontrados.issubset(centros_validos):
-        df = df[df[col_centro].isin(centros_validos)]
+    df = df[df[col_centro].isin(centros_validos)]
  
     agrupado = (
         df.groupby(col_mat, as_index=False)[col_libre]
         .sum()
         .rename(columns={col_mat: "SKU_SAP", col_libre: nombre_stock})
     )
-    return agrupado, centros_invalidos
+    return agrupado
+ 
+ 
+def centros_desconocidos_en_stock(df_stock):
+    """Centros presentes en el archivo de stock que no son ni CD (06) ni CL (07)."""
+    df = df_stock.copy()
+    df.columns = [c.strip() for c in df.columns]
+    centros_presentes = set(df["Centro"].astype(str).str.strip().unique())
+    return centros_presentes - (CENTROS_CD | CENTROS_CL)
  
  
 def calcular_faltante(row):
@@ -263,7 +249,7 @@ st.markdown(
  
 st.markdown("---")
  
-col1, col2, col3 = st.columns(3)
+col1, col2 = st.columns(2)
  
 with col1:
     st.markdown("### 1. Módulo de Preventa")
@@ -276,25 +262,16 @@ with col1:
     )
  
 with col2:
-    st.markdown("### 2. Módulo de Inventario CD")
+    st.markdown("### 2. Módulo de Inventario (MB52)")
     st.caption(
-        "Carga de Stock Centros Coquimbo: importación del informe de existencias "
-        "extraído mediante la transacción MB52 en SAP, correspondiente a los "
-        "Centros Operativos de Coquimbo (terminación 06)."
+        "Carga de Stock CD + CL: importación del informe de existencias extraído "
+        "mediante la transacción MB52 en SAP, incluyendo tanto los Centros "
+        "Operativos de Coquimbo (terminación 06) como los de Coquimext "
+        "(terminación 07) en un solo archivo. La app separa automáticamente "
+        "cada centro según su terminación."
     )
-    file_stock_cd = st.file_uploader(
-        "Sube Stock CD:", type=["csv", "xlsx", "xls"], key="stock_cd"
-    )
- 
-with col3:
-    st.markdown("### 3. Módulo de Inventario CL")
-    st.caption(
-        "Carga de Stock Centros Coquimext: importación del informe de existencias "
-        "extraído mediante la transacción MB52 en SAP, correspondiente a los "
-        "Centros Operativos de Coquimext (terminación 07)."
-    )
-    file_stock_cl = st.file_uploader(
-        "Sube Stock CL:", type=["csv", "xlsx", "xls"], key="stock_cl"
+    file_stock = st.file_uploader(
+        "Sube Stock (CD + CL):", type=["csv", "xlsx", "xls"], key="stock_mb52"
     )
  
 st.markdown("---")
@@ -302,36 +279,31 @@ st.markdown("---")
 procesar = st.button("🚀 Procesar Revisión de Venta", use_container_width=True)
  
 if procesar:
-    if not (file_preventa and file_stock_cd and file_stock_cl):
-        st.error("⚠️ Debes subir los 3 archivos: Preventa, Stock CD y Stock CL.")
+    if not (file_preventa and file_stock):
+        st.error("⚠️ Debes subir los 2 archivos: Preventa y Stock (MB52 CD + CL).")
     else:
         with st.spinner("Procesando..."):
             try:
                 bbdd = cargar_bbdd_codigos()
  
                 df_preventa_raw = leer_archivo(file_preventa)
-                df_stock_cd_raw = leer_archivo(file_stock_cd)
-                df_stock_cl_raw = leer_archivo(file_stock_cl)
+                df_stock_raw = leer_archivo(file_stock)
  
                 df_venta = procesar_preventa(df_preventa_raw)
-                df_stock_cd, centros_raros_cd = procesar_stock(
-                    df_stock_cd_raw, CENTROS_CD, "STOCK_CD"
-                )
-                df_stock_cl, centros_raros_cl = procesar_stock(
-                    df_stock_cl_raw, CENTROS_CL, "STOCK_CL"
-                )
+                df_stock_cd = procesar_stock(df_stock_raw, CENTROS_CD, "STOCK_CD")
+                df_stock_cl = procesar_stock(df_stock_raw, CENTROS_CL, "STOCK_CL")
+                centros_raros = centros_desconocidos_en_stock(df_stock_raw)
  
                 tabla = construir_tabla(df_venta, df_stock_cd, df_stock_cl, bbdd)
  
                 st.session_state["tabla_resultado"] = tabla
-                st.session_state["centros_raros_cd"] = centros_raros_cd
-                st.session_state["centros_raros_cl"] = centros_raros_cl
+                st.session_state["centros_raros"] = centros_raros
  
             except KeyError as e:
                 st.error(
                     f"⚠️ No se encontró la columna {e} en uno de los archivos. "
                     "Revisa que los archivos subidos correspondan al tipo correcto "
-                    "(Preventa / Stock CD / Stock CL) y que no hayan sido modificados."
+                    "(Preventa / Stock MB52) y que no hayan sido modificados."
                 )
             except Exception as e:
                 st.error(f"⚠️ Ocurrió un error procesando los archivos: {e}")
@@ -339,15 +311,11 @@ if procesar:
 if "tabla_resultado" in st.session_state:
     tabla = st.session_state["tabla_resultado"]
  
-    if st.session_state.get("centros_raros_cd"):
+    if st.session_state.get("centros_raros"):
         st.warning(
-            f"El archivo de Stock CD contiene centros no reconocidos como CD (06): "
-            f"{sorted(st.session_state['centros_raros_cd'])}. Fueron excluidos del cálculo."
-        )
-    if st.session_state.get("centros_raros_cl"):
-        st.warning(
-            f"El archivo de Stock CL contiene centros no reconocidos como CL (07): "
-            f"{sorted(st.session_state['centros_raros_cl'])}. Fueron excluidos del cálculo."
+            f"El archivo de Stock contiene centros que no son ni CD (terminación 06) "
+            f"ni CL (terminación 07): {sorted(st.session_state['centros_raros'])}. "
+            "Fueron excluidos del cálculo."
         )
  
     sin_mapeo = (tabla["SKU_SAP"] == "SIN MAPEO").sum()
@@ -435,3 +403,4 @@ if "tabla_resultado" in st.session_state:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         key="descarga_completa",
     )
+ 
