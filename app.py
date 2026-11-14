@@ -12,6 +12,8 @@ st.set_page_config(
     page_icon="📊",
     layout="wide",
 )
+import tema  # noqa: E402
+tema.aplicar()
  
 # ------------------------------------------------------------------
 # PALETA DE COLORES CCU (Manual de Identidad de Marca CCU, pág. 57)
@@ -30,9 +32,8 @@ COLOR_NEGRO = "#000000"
 st.markdown(
     f"""
     <style>
-    .stApp {{ background-color: #0e1117; }}
-    div.stButton > button {{
-        background-color: #ff4b4b;
+        div.stButton > button {{
+        background-color: #5BB030;
         color: white;
         font-weight: 700;
         font-size: 1.1rem;
@@ -41,7 +42,7 @@ st.markdown(
         border-radius: 8px;
         width: 100%;
     }}
-    div.stButton > button:hover {{ background-color: #ff6b6b; color: white; }}
+    div.stButton > button:hover {{ background-color: #4E9A28; color: white; }}
  
     .ccu-metric-card {{
         background-color: {COLOR_BLANCO};
